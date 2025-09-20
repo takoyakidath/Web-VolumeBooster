@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>MP3音量ブースター（IndexedDB対応）</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f4f6f9;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #fff;
+      padding: 2rem;
+      border-radius: 1rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      text-align: center;
+      width: 90%;
+      max-width: 500px;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 1rem; color: #333; }
+    input[type="file"] { margin: 1rem 0; }
+    audio { width: 100%; margin: 1rem 0; }
+    .slider-container { margin-top: 1.5rem; }
+    label { display: block; margin-bottom: 0.5rem; font-weight: bold; color: #555; }
+    input[type="range"] {
+      width: 100%; -webkit-appearance: none;
+      height: 10px; border-radius: 5px;
+      background: linear-gradient(to right, #4cafef, #2196f3);
+      outline: none; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 20px; height: 20px;
+      border-radius: 50%; background: #2196f3; cursor: pointer;
+      border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.6rem 1.2rem;
+      border: none; border-radius: 8px;
+      background: #f44336; color: #fff;
+      font-size: 1rem; cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+    button:hover { background: #d32f2f; }
+    #status { color:#666; font-size:0.9rem; margin-top:1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>MP3音量ブースター</h1>
+    <input type="file" id="fileInput" accept="audio/mp3,audio/mpeg"><br>
+    <audio id="player" controls></audio><br>
+    <div class="slider-container">
+      <label>倍率: <span id="volumeVal">1.0</span>x</label>
+      <input type="range" id="volumeSlider" min="0" max="5" step="0.1" value="1">
+    </div>
+    <button id="resetBtn">リセット</button>
+    <p id="status"></p>
+  </div>
+
+  <script>
+    const player = document.getElementById("player");
+    const fileInput = document.getElementById("fileInput");
+    const slider = document.getElementById("volumeSlider");
+    const volumeVal = document.getElementById("volumeVal");
+    const resetBtn = document.getElementById("resetBtn");
+    const status = document.getElementById("status");
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaElementSource(player);
+    const gainNode = audioCtx.createGain();
+    const compressor = audioCtx.createDynamicsCompressor();
+
+    compressor.threshold.value = -24;
+    compressor.knee.value = 30;
+    compressor.ratio.value = 12;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.25;
+
+    source.connect(gainNode).connect(compressor).connect(audioCtx.destination);
+
+    // IndexedDB セットアップ
+    let db;
+    const request = indexedDB.open("MP3BoosterDB", 1);
+    request.onupgradeneeded = (event) => {
+      db = event.target.result;
+      db.createObjectStore("files");
+    };
+    request.onsuccess = (event) => {
+      db = event.target.result;
+      restoreCache();
+    };
+
+    function restoreCache() {
+      const savedVolume = localStorage.getItem("booster-volume");
+      if (savedVolume) {
+        slider.value = savedVolume;
+        gainNode.gain.value = savedVolume;
+        volumeVal.textContent = savedVolume;
+      }
+
+      const tx = db.transaction("files", "readonly");
+      const store = tx.objectStore("files");
+      const getReq = store.get("lastFile");
+      getReq.onsuccess = () => {
+        if (getReq.result) {
+          const blob = getReq.result;
+          const url = URL.createObjectURL(blob);
+          player.src = url;
+          status.textContent = "前回のファイルを復元しました 🎵";
+        }
+      };
+    }
+
+    // 音量スライダー
+    slider.addEventListener("input", () => {
+      gainNode.gain.value = slider.value;
+      volumeVal.textContent = slider.value;
+      localStorage.setItem("booster-volume", slider.value);
+    });
+
+    // ファイル選択
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const url = URL.createObjectURL(file);
+        player.src = url;
+        audioCtx.resume();
+        status.textContent = "ファイルを読み込みました 🎶";
+
+        const tx = db.transaction("files", "readwrite");
+        tx.objectStore("files").put(file, "lastFile");
+      }
+    });
+
+    // 再生時
+    player.addEventListener("play", () => {
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume();
+      }
+    });
+
+    // 🔹 リセット処理
+    resetBtn.addEventListener("click", () => {
+      // localStorageクリア
+      localStorage.removeItem("booster-volume");
+      slider.value = 1;
+      gainNode.gain.value = 1;
+      volumeVal.textContent = "1.0";
+
+      // IndexedDBクリア
+      const tx = db.transaction("files", "readwrite");
+      tx.objectStore("files").delete("lastFile");
+
+      // プレイヤー停止
+      player.pause();
+      player.removeAttribute("src");
+      player.load();
+
+      status.textContent = "リセットしました 🔄";
+    });
+  </script>
+</body>
+</html>
